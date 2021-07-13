@@ -18,7 +18,7 @@ class Map(pygame.sprite.Sprite):
 	    #지도 이미지 불러오기
         #convert_alpha()를 통해 RGB 채널을 RGBA 채널로 전환한다. 
         current_path = os.path.dirname(__file__)
-        self.image = pygame.image.load(os.path.join(current_path, 'hard2.png')).convert_alpha()
+        self.image = pygame.image.load(os.path.join(current_path, 'easy.png')).convert_alpha()
         self.rect = self.image.get_rect()
         
         #Mask 충돌체크를 위한 mask 생성
