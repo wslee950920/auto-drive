@@ -3,11 +3,13 @@
 
 import rospy
 import numpy as np
-import cv2, time
-#from xycar_msgs.msg import xycar_motor
+import cv2
 
 from Filter import Filter
 from PID import PID
+
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
 
 Width = 640
 Height = 480
@@ -30,7 +32,7 @@ def lane_detection(binary):
     nonzeroy = np.array(nonzero[0])
     nonzerox = np.array(nonzero[1])
 
-    histogram = np.sum(binary[Height//2:,:], axis=0)   #x축 기준 히스토그램
+    histogram = np.sum(binary[Height-Height//10:,:], axis=0)   #x축 기준 히스토그램
     out_img = np.dstack((binary, binary, binary))   #이진 영상에 색깔을 입힐 수 있게끔 3차원(BGR)으로 만들어 준다.
     mid_point=Width//2
 
@@ -69,15 +71,14 @@ def lane_detection(binary):
 
         center_lane_inds = ((nonzerox > (cp(nonzeroy) - margin)) & (nonzerox < (cp(nonzeroy) + margin))) 
 
-        binary[nonzeroy[center_lane_inds], nonzerox[center_lane_inds]] = 0
-        out_img[nonzeroy[center_lane_inds], nonzerox[center_lane_inds]] = [0, 0, 0]
+        out_img[nonzeroy[center_lane_inds], nonzerox[center_lane_inds]] = [255, 0, 0]
     #cv2.imshow('binary', binary)
 
     nonzero = binary.nonzero()
     nonzeroy = np.array(nonzero[0])
     nonzerox = np.array(nonzero[1])
 
-    histogram = np.sum(binary[Height//2:,:], axis=0)
+    histogram = np.sum(binary[Height-Height//10:,:], axis=0)
 
     leftx_base = np.argmax(histogram[:mid_point])
     rightx_base = np.argmax(histogram[mid_point:])+mid_point if np.argmax(histogram[mid_point:])!=0 else Width 
@@ -191,37 +192,31 @@ def calibrate_image(frame):
 def process_image(frame):
     global Offset
 
-    cal=calibrate_image(frame)
+    #cal=calibrate_image(frame)
     #cv2.imshow('cal', cal)
 
-    gray=cv2.cvtColor(cal, cv2.COLOR_BGR2GRAY)
+    gray=cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (0, 0), 1)
-    alpah = 4.0
-    sharp = np.clip((1+alpah)*gray - alpah*blurred, 0, 255).astype(np.uint8)
-    ret, s_binary = cv2.threshold(sharp, 145, 255, cv2.THRESH_BINARY)
-    #cv2.imshow('s_binary', s_binary)
+    ret, s_binary = cv2.threshold(blurred, 120, 255, cv2.THRESH_BINARY)
+    #cv2.imshow('s_binary', ~s_binary)
 
     canny=cv2.Canny(np.uint8(blurred), 60, 70)
     #cv2.imshow('canny', canny)
-    _, b_thresh = cv2.threshold(cal[:, :, 0], 90, 255, cv2.THRESH_BINARY)
-    #cv2.imshow('b_thresh', b_thresh)
 
     kernel=cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    s_dil=cv2.dilate(s_binary, kernel, iterations=2)
-    b_dil=cv2.dilate(b_thresh, kernel, iterations=2)
+    s_dil=cv2.dilate(~s_binary, kernel, iterations=2)
     #cv2.imshow('s_dil', s_dil)
-    #cv2.imshow('b_dil', b_dil)
 
     binary=cv2.bitwise_and(s_dil, canny)
-    binary=cv2.bitwise_and(binary, b_dil)
+    cv2.rectangle(binary, (200, Height-10), (300, Height), (0, 0, 0), -1)
     #cv2.imshow('binary', binary)
 
-    '''cv2.circle(cal, (Width, 380), 5, (0, 0, 255))
-    cv2.circle(cal, (490, Offset-40), 5, (0, 0, 255))
-    cv2.circle(cal, (120, Offset-40), 5, (0, 0, 255))
-    cv2.circle(cal, (0, 380), 5, (0, 0, 255))
-    cv2.imshow('cal', cal)'''
-    #영상 roi
+    cv2.circle(frame, (Width-2*Gap, Height-2*Gap), 5, (0, 0, 255))
+    cv2.circle(frame, (440+Gap//2, 340), 5, (0, 0, 255))
+    cv2.circle(frame, (200-Gap//2, 340), 5, (0, 0, 255))
+    cv2.circle(frame, (2*Gap, Height-2*Gap), 5, (0, 0, 255))
+    cv2.imshow('circle', frame)
+    '''#영상 roi
     srcQuad=np.float32([
         (Width, 380), 
         (490, Offset-40), 
@@ -233,23 +228,23 @@ def process_image(frame):
         (Width, 0),
         (0, 0),
         (0, Height)
-    ])
+    ])'''
     #아래는 실제 자이카 D모델 roi
-    '''srcQuad=np.float32([
-        (Width, 360), 
-        (450, Offset-45), 
-        (150, Offset-45), 
-        (0, 360)
+    srcQuad=np.float32([
+        (Width-2*Gap, Height-2*Gap), 
+        (440+Gap//2, 340), 
+        (200-Gap//2, 340), 
+        (2*Gap, Height-2*Gap)
     ])
     dstQuad=np.float32([
         (Width, Height),
         (Width, 0),
         (0, 0),
         (0, Height)
-    ])'''
+    ])
     pers=cv2.getPerspectiveTransform(srcQuad, dstQuad)
     warp=cv2.warpPerspective(binary, pers, (Width, Height))
-    #cv2.imshow('warp', warp)
+    cv2.imshow('warp', warp)
 
     out_img, left_fitx, right_fitx, ploty, diff=lane_detection(warp)
 
@@ -263,29 +258,32 @@ def process_image(frame):
     newpers=cv2.getPerspectiveTransform(dstQuad, srcQuad)
     newwarp = cv2.warpPerspective(out_img, newpers, (Width, Height))
 
-    result = cv2.addWeighted(cal, 1, newwarp, 0.3, 0)
+    result = cv2.addWeighted(frame, 1, newwarp, 0.3, 0)
 
     return diff, result
 
+image = None
+bridge = CvBridge()
+
+def img_callback(data):
+    global image
+
+    image = bridge.imgmsg_to_cv2(data, "bgr8")
 
 # You are to publish "steer_anlge" following load lanes
 if __name__ == '__main__':
-    cap = cv2.VideoCapture('kmu_track.mkv')
-    time.sleep(3)
+    rospy.init_node('line_drive')
+    rospy.Subscriber("/usb_cam/image_raw", Image, img_callback)
+    rate = rospy.Rate(10)
 
     filter=Filter(10)
     pid=PID(0.55, 0.0, 0.4)
-
-    #rospy.init_node('line_drive')
-    #pub = rospy.Publisher('xycar_motor', xycar_motor, queue_size=1)
-    #rate = rospy.Rate(10)
 
     lpos=0
     rpos=Width
     center=Width//2
     while not rospy.is_shutdown():
-        ret, image = cap.read()
-        if not ret:
+        if np.array(image).size<Width*Height*3:
             continue
 
         diff, result = process_image(image)
@@ -295,8 +293,7 @@ if __name__ == '__main__':
 
         cv2.putText(result, 'angle : {0:0.2f}`'.format(angle), (25, 50), 0, 1, (0, 255, 0), 2)
         cv2.imshow('result', result)
-        
-        #xm=xycar_motor()
+    
         if abs(angle)<10:
             pid.Kp=0.3
             pid.Ki=0.0

@@ -2,3 +2,6 @@
 *.tar.gz
 *.pth
 *.mp4
+*.bag
+*.png
+lane_detection/src/model*
